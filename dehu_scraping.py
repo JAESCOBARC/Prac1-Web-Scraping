@@ -25,6 +25,7 @@ instalar_si_falta("pyautogui")
 instalar_si_falta("pywinauto")
 
 import time
+import ctypes
 import openpyxl
 import pyautogui
 from pywinauto import Desktop
@@ -40,6 +41,131 @@ EXCEL_PATH = r"C:\Users\Usuario\OneDrive\PROYECTOS DIGITALES\TRABAJOS PERSONALIZ
 CERT_PATH  = r"C:\Users\Usuario\OneDrive\CERTIFICADOS DIGITALES\Y8189986E_CALVACHE_ACEVEDO_JHON_FREDY_matiaskalvache_OK.p12"  # .pfx o .p12
 CERT_PASS  = "matiaskalvache"
 NIF        = "Y8189986E"
+
+# ---------------------------------------------------------------------------
+# GESTIÓN DEL CERTIFICADO
+# ---------------------------------------------------------------------------
+def instalar_certificado(cert_path: str, cert_pass: str) -> str:
+    """
+    Instala el certificado .p12/.pfx en el almacén personal de Windows (MY)
+    si no está ya instalado. Devuelve el nombre (subject) del certificado.
+    Requiere ejecutar el script con permisos de usuario normal (no admin).
+    """
+    import ctypes.wintypes
+
+    # Cargar el .p12 en memoria
+    CRYPT_EXPORTABLE = 0x00000001
+    PKCS12_INCLUDE_EXTENDED_PROPERTIES = 0x0010
+
+    with open(cert_path, "rb") as f:
+        p12_data = f.read()
+
+    # Convertir contraseña a UTF-16LE para la API de Windows
+    pass_encoded = (cert_pass + "\x00").encode("utf-16-le")
+
+    class CRYPT_DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    buf = (ctypes.c_byte * len(p12_data))(*p12_data)
+    blob = CRYPT_DATA_BLOB(len(p12_data), buf)
+
+    crypt32 = ctypes.windll.crypt32
+
+    # Abrir la memoria del PFX como store temporal
+    mem_store = crypt32.PFXImportCertStore(
+        ctypes.byref(blob),
+        ctypes.c_wchar_p(cert_pass),
+        CRYPT_EXPORTABLE | PKCS12_INCLUDE_EXTENDED_PROPERTIES,
+    )
+    if not mem_store:
+        raise RuntimeError("No se pudo leer el archivo .p12. Verifica la ruta y contraseña.")
+
+    # Obtener el primer certificado del store temporal para leer su nombre
+    cert_ctx = crypt32.CertEnumCertificatesInStore(mem_store, None)
+    nombre = ""
+    if cert_ctx:
+        buf_name = ctypes.create_unicode_buffer(256)
+        crypt32.CertGetNameStringW(cert_ctx, 4, 0, None, buf_name, 256)  # 4 = CERT_NAME_SIMPLE_DISPLAY_TYPE
+        nombre = buf_name.value
+
+    crypt32.CertCloseStore(mem_store, 0)
+
+    # Abrir el almacén personal de Windows (MY) y verificar si ya está instalado
+    CERT_STORE_PROV_SYSTEM = 10
+    CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000
+    my_store = crypt32.CertOpenStore(
+        CERT_STORE_PROV_SYSTEM, 0, None,
+        CERT_SYSTEM_STORE_CURRENT_USER, ctypes.c_wchar_p("MY")
+    )
+
+    # Reinstalar siempre para asegurar que está actualizado
+    buf2 = (ctypes.c_byte * len(p12_data))(*p12_data)
+    blob2 = CRYPT_DATA_BLOB(len(p12_data), buf2)
+    result = crypt32.PFXImportCertStore(
+        ctypes.byref(blob2),
+        ctypes.c_wchar_p(cert_pass),
+        CRYPT_EXPORTABLE | PKCS12_INCLUDE_EXTENDED_PROPERTIES,
+    )
+    if result:
+        crypt32.CertCloseStore(result, 0)
+        print(f"Certificado '{nombre}' instalado/verificado en almacén de Windows.")
+    else:
+        print("Advertencia: no se pudo instalar el certificado automáticamente.")
+
+    if my_store:
+        crypt32.CertCloseStore(my_store, 0)
+
+    return nombre
+
+
+def seleccionar_certificado_dialogo(nombre_cert: str) -> None:
+    """
+    Busca el diálogo de selección de certificado de Windows y selecciona
+    el certificado cuyo nombre coincida con nombre_cert. Pulsa Aceptar.
+    """
+    dialogo = None
+    for _ in range(40):   # hasta 20 segundos
+        time.sleep(0.5)
+        try:
+            dialogo = Desktop(backend="win32").window(
+                title_re=".*(Seguridad|certificado|Security|Certificate|Seleccionar).*"
+            )
+            if dialogo.exists():
+                break
+        except Exception:
+            pass
+
+    if not dialogo or not dialogo.exists():
+        # Sin diálogo visible, intentar Enter por si se autoseleccionó
+        pyautogui.press("enter")
+        return
+
+    dialogo.set_focus()
+    time.sleep(0.5)
+
+    # Intentar seleccionar el certificado correcto en la lista si hay varios
+    try:
+        lista = dialogo.child_window(control_type="List")
+        if lista.exists():
+            for item in lista.items():
+                if nombre_cert.upper() in item.texts()[0].upper():
+                    item.click_input()
+                    time.sleep(0.3)
+                    break
+    except Exception:
+        pass
+
+    # Pulsar Aceptar / OK
+    try:
+        btn_ok = dialogo.child_window(title_re=".*(Aceptar|OK).*", control_type="Button")
+        if btn_ok.exists():
+            btn_ok.click_input()
+            return
+    except Exception:
+        pass
+
+    pyautogui.press("enter")
+
 
 # ---------------------------------------------------------------------------
 # UTILIDADES
@@ -124,6 +250,9 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
     conteo     : contador de ciclo
     hoja2_fila : fila de Hoja2 donde escribir el estado del proceso
     """
+    # ---- Instalar certificado en Windows y obtener su nombre ----
+    nombre_cert = instalar_certificado(CERT_PATH, CERT_PASS)
+
     wb  = openpyxl.load_workbook(EXCEL_PATH, keep_vba=True)
     ws1 = wb.worksheets[0]   # Hoja1 — datos principales
     ws2 = wb.worksheets[1]   # Hoja2 — estado del proceso
@@ -176,27 +305,8 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
             print(f"[DEBUG] URL tras clic certificado: {page.url}")
-            # ---- Manejar diálogo de certificado de Windows con pywinauto ----
-            # Esperar a que aparezca la ventana nativa del selector de certificado
-            dialogo = None
-            for _ in range(20):   # hasta 10 segundos
-                time.sleep(0.5)
-                try:
-                    dialogo = Desktop(backend="win32").window(
-                        title_re=".*(Seguridad|certificado|Security|Certificate).*"
-                    )
-                    if dialogo.exists():
-                        break
-                except Exception:
-                    pass
-
-            if dialogo and dialogo.exists():
-                dialogo.set_focus()
-                pyautogui.press("enter")   # confirmar el certificado seleccionado
-                time.sleep(1)
-            else:
-                # Si no apareció diálogo, intentar con Enter genérico de todas formas
-                pyautogui.press("enter")
+            # ---- Seleccionar certificado en el diálogo nativo de Windows ----
+            seleccionar_certificado_dialogo(nombre_cert)
 
             page.wait_for_load_state("networkidle")
 
