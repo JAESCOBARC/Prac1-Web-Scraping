@@ -219,11 +219,11 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
         cert_entry = {"pfxPath": CERT_PATH, "passphrase": CERT_PASS}
         context = browser.new_context(
             client_certificates=[
+                {**cert_entry, "origin": "https://pasarela-ident.clave.gob.es"},  # dominio real TLS
                 {**cert_entry, "origin": "https://dehu.redsara.es"},
-                {**cert_entry, "origin": "https://pasarela.clave.gob.es"},   # ← dominio real de auth
+                {**cert_entry, "origin": "https://pasarela.clave.gob.es"},
                 {**cert_entry, "origin": "https://autentica.redsara.es"},
                 {**cert_entry, "origin": "https://clave.gob.es"},
-                {**cert_entry, "origin": "https://afirma.redsara.es"},
             ]
         )
         page = context.new_page()
