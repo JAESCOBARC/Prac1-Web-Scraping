@@ -1,1 +1,410 @@
+import time
+import subprocess
+from datetime import datetime, date, timedelta
+import sys
+#import sys
+# Auto-instalación de dependencias
+def instalar_si_falta(paquete):
+    try:
+        __import__(paquete)
+    except ImportError:
+        print(f"'{paquete}' no encontrado. Instalando...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", paquete])
+        print(f"'{paquete}' instalado correctamente.")
 
+instalar_si_falta("openpyxl")
+instalar_si_falta("selenium")
+
+import openpyxl
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+
+# -----------------------------------------------
+# CONFIGURACIÓN — ajusta estos valores
+# -----------------------------------------------
+EXCEL_PATH  = r"C:\Users\Usuario\OneDrive\PROYECTOS DIGITALES\TRABAJOS PERSONALIZADOS\GESTION.ES\AUTOMATIZACIONES SELENIUM\ACCESO_DEHU_ULTIMO.xlsm"
+AUTOIT_EXE  = r"C:\Users\Usuario\OneDrive\PROYECTOS DIGITALES\TRABAJOS PERSONALIZADOS\GESTION.ES\AceptarVentana.exe"
+NIF         = "60560345B"   # NIF a consultar
+
+
+# -----------------------------------------------
+# UTILIDADES
+# -----------------------------------------------
+
+def get_last_row(ws: openpyxl.worksheet.worksheet.Worksheet) -> int:
+    """Devuelve el número de la última fila con datos en la columna A."""
+    last = 1
+    for row in ws.iter_rows(min_col=1, max_col=1):
+        for cell in row:
+            if cell.value is not None:
+                last = cell.row
+    return last
+
+
+def parse_date(value: str) -> date | None:
+    """Convierte string de fecha española (dd/mm/yyyy) a objeto date."""
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value.strip(), fmt).date()
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
+# -----------------------------------------------
+# SCRIPT JAVASCRIPT REUTILIZABLE
+# -----------------------------------------------
+
+def _js_rows_count() -> str:
+    return (
+        "let t = document.querySelector('#tablaNotificacionesPendientes');"
+        "if (!t || !t.shadowRoot) return 0;"
+        "let tb = t.shadowRoot.querySelector('table[data-name=\"DntTable\"]');"
+        "if (!tb) return 0;"
+        "let rows = tb.querySelectorAll('tr.dnt-table__row.dnt-table__row--grouped');"
+        "return rows.length;"
+    )
+
+
+def _js_cell(row_idx: int, col_idx: int) -> str:
+    return (
+        "let t = document.querySelector('#tablaNotificacionesPendientes');"
+        "let sh = t.shadowRoot;"
+        "let tbl = sh.querySelector('table[data-name=\"DntTable\"]');"
+        "let rows = tbl.querySelectorAll('tr.dnt-table__row.dnt-table__row--grouped');"
+        f"return rows[{row_idx}].querySelectorAll('td')[{col_idx}].innerText.trim();"
+    )
+
+
+def _js_objeto(row_idx: int) -> str:
+    return (
+        "let t = document.querySelector('#tablaNotificacionesPendientes');"
+        "let sh = t.shadowRoot;"
+        "let tbl = sh.querySelector('table[data-name=\"DntTable\"]');"
+        "let rows = tbl.querySelectorAll('tr.dnt-table__row.dnt-table__row--grouped');"
+        f"let td = rows[{row_idx}].querySelectorAll('td')[3].querySelector('div');"
+        "return td?.getAttribute('data-original-text-concept') ?? td?.innerText.trim();"
+    )
+
+
+# -----------------------------------------------
+# FUNCIÓN PRINCIPAL: consulta()
+# -----------------------------------------------
+
+def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
+    """
+    Accede a la DEHú y extrae notificaciones pendientes al Excel.
+
+    Parámetros
+    ----------
+    nif         : NIF a consultar
+    conteo      : contador de ciclo (equivalente a la variable 'conteo' de VBA)
+    hoja2_fila  : fila de Hoja2 donde escribir el estado del proceso
+    """
+    wb   = openpyxl.load_workbook(EXCEL_PATH, keep_vba=True)
+    ws1  = wb.worksheets[0]   # Hoja1 — datos principales
+    ws2  = wb.worksheets[1]   # Hoja2 — estado del proceso
+    estado = ""
+
+    # ---- Configurar Chrome ----
+    options = Options()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument(
+        "--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure"
+    )
+
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(50)
+
+    try:
+        # Ocultar webdriver para evitar detección
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        driver.execute_script("window.navigator.chrome = { runtime: {} };")
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'languages', {get: () => ['es-ES', 'es']});"
+        )
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
+        )
+
+        # ---- Abrir DEHú ----
+        driver.get("https://dehu.redsara.es")
+        driver.maximize_window()
+        time.sleep(5)
+
+        driver.execute_script("window.scrollBy(0, 200);")
+        time.sleep(2)
+        driver.execute_script("document.querySelector('dnt-button.access-btn').click();")
+        time.sleep(8)
+
+        # ---- AutoIT: aceptar ventana de certificado ----
+        subprocess.Popen([AUTOIT_EXE])
+
+        # Clic en "certificado digital"
+        driver.find_element(
+            By.XPATH,
+            "//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
+        ).click()
+        time.sleep(5)
+
+        # ---- Ir a notificaciones pendientes ----
+        driver.get("https://dehu.redsara.es/es/notifications")
+        time.sleep(6)
+
+        current_url = driver.current_url
+
+        if "security" in current_url.upper():
+            driver.get("https://dehu.redsara.es/es/notifications")
+            time.sleep(2)
+            current_url = driver.current_url
+
+        # ---- Verificar acceso correcto ----
+        last_row = get_last_row(ws1) + 1
+
+        if current_url != "https://dehu.redsara.es/es/notifications":
+            ws1.cell(row=last_row, column=1).value = datetime.now()
+            ws1.cell(row=last_row, column=2).value = nif
+            ws1.cell(row=last_row, column=4).value = "ERROR REVISAR CERTIFICADO"
+            ws2.cell(row=hoja2_fila, column=3).value = "Error al acceder con el certificado"
+            wb.save(EXCEL_PATH)
+            return "ERROR"
+
+        time.sleep(2)
+
+        # ---- Extraer NIF y Razón Social del encabezado ----
+        texto = driver.find_element(By.XPATH, "//*[@id='pane-0']/p[1]").text.upper()
+        time.sleep(1)
+
+        prefijo = "LAS NOTIFICACIONES PENDIENTES QUE SE MUESTRAN SE HAN EMITIDO A "
+        texto_limpio = texto.replace(prefijo, "")
+
+        idx_nif = texto_limpio.find("NIF")
+        q_nif = texto_limpio[idx_nif + 4: idx_nif + 13].strip()
+
+        if nif.upper().strip() != q_nif:
+            ws1.cell(row=last_row, column=1).value = datetime.now()
+            ws1.cell(row=last_row, column=2).value = nif
+            ws1.cell(row=last_row, column=4).value = "ERROR REVISAR CERTIFICADO"
+            ws2.cell(row=hoja2_fila, column=3).value = "Error al acceder con el certificado"
+            wb.save(EXCEL_PATH)
+            return "ERROR"
+
+        idx_con = texto_limpio.find("CON EL NIF")
+        q_rz = texto_limpio[:idx_con].strip()
+
+        # ---- Contar notificaciones ----
+        no_notif_elem = driver.execute_script(_js_rows_count())
+
+        # ---- CASO: Sin notificaciones ----
+        if not no_notif_elem or no_notif_elem <= 0:
+            ws1.cell(row=last_row, column=1).value = datetime.now()
+            time.sleep(2)
+            ws1.cell(row=last_row, column=2).value = q_nif
+            time.sleep(2)
+            ws1.cell(row=last_row, column=3).value = q_rz
+
+            txt_sin = driver.execute_script(
+                "return document.querySelector('app-notifications-list p.ng-star-inserted')"
+                "?.innerText.trim();"
+            )
+            if txt_sin and "no dispones de notificaciones" in txt_sin.lower():
+                time.sleep(1)
+                ws1.cell(row=last_row, column=4).value = (
+                    "No se encontraron resultados para los filtros seleccionados"
+                )
+                estado = "Terminado"
+
+        # ---- CASO: Existen notificaciones ----
+        else:
+            # Calcular número de páginas
+            txt_info = driver.execute_script(
+                "let p = document.querySelector('#pagination-PendingNotifications');"
+                "if (!p || !p.shadowRoot) return '';"
+                "let el = p.shadowRoot.querySelector('.dnt-pagination-total');"
+                "return el ? el.textContent.trim() : '';"
+            )
+
+            pag = 1
+            if txt_info:
+                try:
+                    total = int(txt_info.split(" de ")[1].split(" ")[0].strip())
+                    pag = (total + 9) // 10
+                except (IndexError, ValueError):
+                    pag = 1
+
+            for q in range(1, pag + 1):
+
+                # Paginar (desde página 2 en adelante)
+                if q > 1:
+                    time.sleep(2)
+                    driver.execute_script(
+                        "let pag = document.querySelector('#pagination-PendingNotifications');"
+                        "let sh1 = pag ? pag.shadowRoot : null;"
+                        "let nextCmp = sh1 ? sh1.querySelector('dnt-pagination-next') : null;"
+                        "let dntBtn = nextCmp ? nextCmp.querySelector('dnt-button') : null;"
+                        "let sh2 = dntBtn ? dntBtn.shadowRoot : null;"
+                        "let realBtn = sh2 ? sh2.querySelector('button') : null;"
+                        "if (realBtn) realBtn.click();"
+                    )
+                    time.sleep(3)
+                    driver.execute_script("window.scrollBy(0, 200);")
+
+                    no_notif_elem = driver.execute_script(_js_rows_count())
+
+                num_notif = no_notif_elem
+                driver.execute_script("window.scrollBy(0, 200);")
+
+                # ---- Iterar notificaciones de la página ----
+                for i in range(1, num_notif + 1):
+
+                    if not (i == 1 and conteo > 1):
+                        last_row = get_last_row(ws1) + 1
+
+                    idx = i - 1   # índice 0-based para JS
+
+                    ws1.cell(row=last_row, column=1).value = datetime.now()
+                    time.sleep(2)
+
+                    # NIF
+                    ws1.cell(row=last_row, column=2).value = q_nif
+                    ws1.cell(row=last_row, column=10).value = q_nif
+                    time.sleep(2)
+
+                    # Razón Social
+                    ws1.cell(row=last_row, column=3).value = q_rz
+                    time.sleep(2)
+
+                    # Organismo (col 4, índice JS 4)
+                    ws1.cell(row=last_row, column=4).value = driver.execute_script(
+                        _js_cell(idx, 4)
+                    )
+                    time.sleep(2)
+
+                    # Objeto (col 5, índice JS 3)
+                    ws1.cell(row=last_row, column=5).value = driver.execute_script(
+                        _js_objeto(idx)
+                    )
+                    time.sleep(2)
+
+                    # Fecha Disposición (col 6, índice JS 6)
+                    f1_str = driver.execute_script(_js_cell(idx, 6))
+                    f1 = parse_date(f1_str) if f1_str else None
+                    ws1.cell(row=last_row, column=6).value = f1 if f1 else f1_str
+                    time.sleep(2)
+
+                    # Identificador (col 7, índice JS 2) — se guarda como texto con '
+                    identificador = driver.execute_script(_js_cell(idx, 2))
+                    ws1.cell(row=last_row, column=7).value = "'" + str(identificador or "")
+                    time.sleep(2)
+
+                    # Tipo (col 8, índice JS 7)
+                    ws1.cell(row=last_row, column=8).value = driver.execute_script(
+                        _js_cell(idx, 7)
+                    )
+                    time.sleep(2)
+
+                    # Fecha Caducidad (col 9) — lógica de índice igual al VBA
+                    if i == 1:
+                        t_idx = 1
+                    elif i % 2 == 0:
+                        t_idx = i + 1
+                    else:
+                        t_idx = i + 2
+
+                    f2_str = driver.execute_script(
+                        "return document.querySelector('#tablaNotificacionesPendientes')"
+                        f".shadowRoot.querySelectorAll('tbody tr')[{t_idx}]"
+                        ".querySelectorAll('td')[1].innerText.trim();"
+                    )
+                    if f2_str:
+                        f2_str = f2_str[-10:]   # últimos 10 caracteres (Right 10)
+
+                    col9_val = ws1.cell(row=last_row, column=9).value
+                    if col9_val and str(col9_val).upper() == "NO PROCEDE":
+                        ws1.cell(row=last_row, column=9).value = None
+                    else:
+                        f2 = parse_date(f2_str) if f2_str else None
+                        ws1.cell(row=last_row, column=9).value = f2 if f2 else f2_str
+                    time.sleep(2)
+
+        # ---- Limpiar almacenamiento del navegador ----
+        driver.execute_script("window.localStorage.clear();")
+        driver.execute_script("window.sessionStorage.clear();")
+        driver.execute_script("document.cookie = '';")
+
+        estado = "Terminado"
+        wb.save(EXCEL_PATH)
+
+    except Exception as exc:
+        print(f"[ERROR] {exc}")
+        try:
+            wb.save(EXCEL_PATH)
+        except Exception:
+            pass
+
+    finally:
+        driver.quit()
+        time.sleep(10)
+
+    return estado
+
+
+# -----------------------------------------------
+# FUNCIÓN SECUNDARIA: historico()
+# -----------------------------------------------
+
+def historico() -> None:
+    """
+    Mueve a Hoja3 las filas de Hoja1 con fecha de hace 31 días
+    y las elimina de Hoja1.
+    """
+    print(f"Inicia: {datetime.now()}")
+
+    wb  = openpyxl.load_workbook(EXCEL_PATH, keep_vba=True)
+    ws1 = wb.worksheets[0]   # Hoja1
+    ws3 = wb.worksheets[2]   # Hoja3
+
+    date_ref = date.today() - timedelta(days=31)
+    filas_a_mover = []
+
+    for row in ws1.iter_rows(min_row=2):
+        cell_fecha = row[0].value
+        if cell_fecha is None:
+            continue
+
+        if isinstance(cell_fecha, datetime):
+            fecha = cell_fecha.date()
+        elif isinstance(cell_fecha, date):
+            fecha = cell_fecha
+        else:
+            fecha = parse_date(str(cell_fecha))
+
+        if fecha == date_ref:
+            filas_a_mover.append(row[0].row)
+
+    for fila_num in filas_a_mover:
+        ultima_h3 = get_last_row(ws3) + 1
+        for col in range(1, 12):
+            ws3.cell(row=ultima_h3, column=col).value = ws1.cell(row=fila_num, column=col).value
+
+    for fila_num in sorted(filas_a_mover, reverse=True):
+        ws1.delete_rows(fila_num)
+
+    wb.save(EXCEL_PATH)
+    print(f"Termina: {datetime.now()}")
+
+
+# -----------------------------------------------
+# PUNTO DE ENTRADA
+# -----------------------------------------------
+
+if __name__ == "__main__":
+    resultado = consulta(nif=NIF)
+    print(f"Estado consulta: {resultado}")
+    historico()
