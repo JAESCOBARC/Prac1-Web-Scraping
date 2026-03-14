@@ -278,7 +278,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                 "  inner.click();"
                 "}"
             )
-            page.wait_for_load_state("networkidle")
+            page.wait_for_load_state("domcontentloaded")
             print(f"[DEBUG] URL tras botón acceso: {page.url}")
 
             # ---- Seleccionar certificado digital ----
@@ -303,10 +303,11 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
             print(f"[DEBUG] URL tras autenticación: {page.url}")
 
             # ---- Ir a notificaciones pendientes ----
-            page.goto("https://dehu.redsara.es/es/notifications", wait_until="networkidle")
+            page.goto("https://dehu.redsara.es/es/notifications", wait_until="load", timeout=45000)
+            page.wait_for_load_state("domcontentloaded")
             current_url = page.url
             if "security" in current_url.upper():
-                page.goto("https://dehu.redsara.es/es/notifications", wait_until="networkidle")
+                page.goto("https://dehu.redsara.es/es/notifications", wait_until="load", timeout=45000)
                 current_url = page.url
 
             # ---- Verificar acceso correcto ----
@@ -385,7 +386,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                             "  realBtn?.click();"
                             "}"
                         )
-                        page.wait_for_load_state("networkidle")
+                        page.wait_for_load_state("domcontentloaded")
                         page.evaluate("() => window.scrollBy(0, 200)")
                         no_notif_elem = page.evaluate(_js_rows_count())
 
