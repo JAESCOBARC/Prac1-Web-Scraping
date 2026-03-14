@@ -21,8 +21,13 @@ instalar_si_falta(
     "playwright",
     extra_cmd=[sys.executable, "-m", "playwright", "install", "chromium"],
 )
+instalar_si_falta("pyautogui")
+instalar_si_falta("pywinauto")
 
+import time
 import openpyxl
+import pyautogui
+from pywinauto import Desktop
 from playwright.sync_api import sync_playwright
 
 # ---------------------------------------------------------------------------
@@ -125,14 +130,10 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
     estado = "ERROR"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)  # DEBUG: visible para ver qué carga la web
-        context = browser.new_context(
-            client_certificates=[{
-                "origin": "https://dehu.redsara.es",
-                "pfxPath": CERT_PATH,
-                "passphrase": CERT_PASS,
-            }]
-        )
+        # headless=False obligatorio: el diálogo de certificado es una ventana
+        # nativa de Windows que solo aparece con navegador visible.
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
         page = context.new_page()
 
         try:
@@ -162,6 +163,28 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
             page.click(
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
+            # ---- Manejar diálogo de certificado de Windows con pywinauto ----
+            # Esperar a que aparezca la ventana nativa del selector de certificado
+            dialogo = None
+            for _ in range(20):   # hasta 10 segundos
+                time.sleep(0.5)
+                try:
+                    dialogo = Desktop(backend="win32").window(
+                        title_re=".*(Seguridad|certificado|Security|Certificate).*"
+                    )
+                    if dialogo.exists():
+                        break
+                except Exception:
+                    pass
+
+            if dialogo and dialogo.exists():
+                dialogo.set_focus()
+                pyautogui.press("enter")   # confirmar el certificado seleccionado
+                time.sleep(1)
+            else:
+                # Si no apareció diálogo, intentar con Enter genérico de todas formas
+                pyautogui.press("enter")
+
             page.wait_for_load_state("networkidle")
 
             # ---- Ir a notificaciones pendientes ----
