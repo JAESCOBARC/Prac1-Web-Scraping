@@ -220,6 +220,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
         context = browser.new_context(
             client_certificates=[
                 {**cert_entry, "origin": "https://dehu.redsara.es"},
+                {**cert_entry, "origin": "https://pasarela.clave.gob.es"},   # ← dominio real de auth
                 {**cert_entry, "origin": "https://autentica.redsara.es"},
                 {**cert_entry, "origin": "https://clave.gob.es"},
                 {**cert_entry, "origin": "https://afirma.redsara.es"},
@@ -256,10 +257,11 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
             print(f"[DEBUG] URL tras clic certificado: {page.url}")
-            # ---- Seleccionar certificado en el diálogo nativo de Windows ----
-            seleccionar_certificado_dialogo(nombre_cert)
-
-            page.wait_for_load_state("networkidle")
+            # Con client_certificates configurado para pasarela.clave.gob.es,
+            # el certificado se presenta automáticamente en el handshake TLS
+            # sin diálogo nativo. Esperamos a que la redirección llegue a DEHú.
+            page.wait_for_url("**/dehu.redsara.es/**", timeout=30000)
+            print(f"[DEBUG] URL tras autenticación: {page.url}")
 
             # ---- Ir a notificaciones pendientes ----
             page.goto("https://dehu.redsara.es/es/notifications", wait_until="networkidle")
