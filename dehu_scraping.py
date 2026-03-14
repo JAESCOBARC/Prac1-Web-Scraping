@@ -26,9 +26,10 @@ instalar_si_falta("pywinauto")
 instalar_si_falta("pywin32")
 
 import time
+import threading
 import openpyxl
 import pyautogui
-from pywinauto import Desktop
+from pywinauto import Desktop, Application
 from playwright.sync_api import sync_playwright
 
 # ---------------------------------------------------------------------------
@@ -69,53 +70,85 @@ def instalar_certificado(cert_path: str, cert_pass: str) -> str:
     return nombre
 
 
-def seleccionar_certificado_dialogo(nombre_cert: str) -> None:
+def _buscar_dialogo_cert() -> object:
+    """Busca el diálogo de certificado de Chrome con backend UIA y win32."""
+    palabras = ["certificado", "certificate", "seleccionar", "autenticación"]
+    for backend in ("uia", "win32"):
+        try:
+            for win in Desktop(backend=backend).windows():
+                try:
+                    title = win.window_text().lower()
+                    if any(p in title for p in palabras):
+                        return win
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return None
+
+
+def _hilo_dialogo_cert(nif: str) -> None:
     """
-    Busca el diálogo de selección de certificado de Windows y selecciona
-    el certificado cuyo nombre coincida con nombre_cert. Pulsa Aceptar.
+    Hilo paralelo: espera a que aparezca el diálogo de certificado de Chrome,
+    selecciona el certificado correcto por NIF y pulsa Aceptar.
+    Se ejecuta en paralelo mientras Playwright espera la redirección.
     """
     dialogo = None
     for _ in range(40):   # hasta 20 segundos
         time.sleep(0.5)
+        dialogo = _buscar_dialogo_cert()
+        if dialogo:
+            break
+
+    if not dialogo:
+        print("[DEBUG] Diálogo de certificado no detectado (puede haberse autoseleccionado)")
+        return
+
+    print(f"[DEBUG] Diálogo encontrado: '{dialogo.window_text()}'")
+    time.sleep(0.3)
+    dialogo.set_focus()
+
+    # Seleccionar el certificado correcto por NIF
+    seleccionado = False
+    for backend in ("uia", "win32"):
         try:
-            dialogo = Desktop(backend="win32").window(
-                title_re=".*(Seguridad|certificado|Security|Certificate|Seleccionar).*"
-            )
-            if dialogo.exists():
+            win = Desktop(backend=backend).window(handle=dialogo.handle)
+            items = win.descendants(control_type="ListItem")
+            for item in items:
+                try:
+                    texto = item.window_text()
+                    if nif.upper() in texto.upper():
+                        item.click_input()
+                        time.sleep(0.3)
+                        seleccionado = True
+                        print(f"[DEBUG] Certificado seleccionado: {texto}")
+                        break
+                except Exception:
+                    pass
+            if seleccionado:
                 break
         except Exception:
             pass
 
-    if not dialogo or not dialogo.exists():
-        # Sin diálogo visible, intentar Enter por si se autoseleccionó
+    if not seleccionado:
+        print("[DEBUG] No se encontró el certificado por NIF, usando el seleccionado por defecto")
+
+    # Pulsar Aceptar
+    pulsado = False
+    for backend in ("uia", "win32"):
+        try:
+            win = Desktop(backend=backend).window(handle=dialogo.handle)
+            btn = win.child_window(title_re=".*(Aceptar|OK).*", control_type="Button")
+            if btn.exists():
+                btn.click_input()
+                pulsado = True
+                break
+        except Exception:
+            pass
+
+    if not pulsado:
+        dialogo.set_focus()
         pyautogui.press("enter")
-        return
-
-    dialogo.set_focus()
-    time.sleep(0.5)
-
-    # Intentar seleccionar el certificado correcto en la lista si hay varios
-    try:
-        lista = dialogo.child_window(control_type="List")
-        if lista.exists():
-            for item in lista.items():
-                if nombre_cert.upper() in item.texts()[0].upper():
-                    item.click_input()
-                    time.sleep(0.3)
-                    break
-    except Exception:
-        pass
-
-    # Pulsar Aceptar / OK
-    try:
-        btn_ok = dialogo.child_window(title_re=".*(Aceptar|OK).*", control_type="Button")
-        if btn_ok.exists():
-            btn_ok.click_input()
-            return
-    except Exception:
-        pass
-
-    pyautogui.press("enter")
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +286,20 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button",
                 timeout=15000,
             )
+            # Lanzar hilo paralelo ANTES del clic para capturar el diálogo
+            # en cuanto aparezca (Playwright queda bloqueado esperando la URL)
+            t_cert = threading.Thread(
+                target=_hilo_dialogo_cert, args=(nif,), daemon=True
+            )
+            t_cert.start()
+
             page.click(
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
             print(f"[DEBUG] URL tras clic certificado: {page.url}")
-            # Con client_certificates configurado para pasarela.clave.gob.es,
-            # el certificado se presenta automáticamente en el handshake TLS
-            # sin diálogo nativo. Esperamos a que la redirección llegue a DEHú.
-            page.wait_for_url("**/dehu.redsara.es/**", timeout=30000)
+            # Esperar redirección de vuelta a DEHú tras la autenticación
+            page.wait_for_url("**/dehu.redsara.es/**", timeout=40000)
+            t_cert.join(timeout=3)
             print(f"[DEBUG] URL tras autenticación: {page.url}")
 
             # ---- Ir a notificaciones pendientes ----
