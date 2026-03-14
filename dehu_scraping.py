@@ -125,7 +125,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
     estado = "ERROR"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)  # DEBUG: visible para ver qué carga la web
         context = browser.new_context(
             client_certificates=[{
                 "origin": "https://dehu.redsara.es",
@@ -138,8 +138,13 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
         try:
             # ---- Abrir DEHú y pulsar botón de acceso ----
             page.goto("https://dehu.redsara.es", wait_until="domcontentloaded")
-            # Esperar a que el web component cargue su shadow DOM antes de clicar
-            page.wait_for_selector("dnt-button.access-btn", timeout=15000)
+            # Esperar a que el web component esté en el DOM (incluye shadow DOM)
+            page.wait_for_function(
+                "() => !!document.querySelector('dnt-button.access-btn')",
+                timeout=20000,
+            )
+            # Guardar screenshot para depuración — ver qué muestra la página
+            page.screenshot(path="debug_inicio.png")
             page.evaluate(
                 "() => {"
                 "  const btn = document.querySelector('dnt-button.access-btn');"
