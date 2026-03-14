@@ -23,9 +23,9 @@ instalar_si_falta(
 )
 instalar_si_falta("pyautogui")
 instalar_si_falta("pywinauto")
+instalar_si_falta("pywin32")
 
 import time
-import ctypes
 import openpyxl
 import pyautogui
 from pywinauto import Desktop
@@ -48,73 +48,24 @@ NIF        = "Y8189986E"
 def instalar_certificado(cert_path: str, cert_pass: str) -> str:
     """
     Instala el certificado .p12/.pfx en el almacén personal de Windows (MY)
-    si no está ya instalado. Devuelve el nombre (subject) del certificado.
-    Requiere ejecutar el script con permisos de usuario normal (no admin).
+    usando PowerShell. Devuelve el nombre (subject) del certificado.
     """
-    import ctypes.wintypes
-
-    # Cargar el .p12 en memoria
-    CRYPT_EXPORTABLE = 0x00000001
-    PKCS12_INCLUDE_EXTENDED_PROPERTIES = 0x0010
-
-    with open(cert_path, "rb") as f:
-        p12_data = f.read()
-
-    # Convertir contraseña a UTF-16LE para la API de Windows
-    pass_encoded = (cert_pass + "\x00").encode("utf-16-le")
-
-    class CRYPT_DATA_BLOB(ctypes.Structure):
-        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_byte))]
-
-    buf = (ctypes.c_byte * len(p12_data))(*p12_data)
-    blob = CRYPT_DATA_BLOB(len(p12_data), buf)
-
-    crypt32 = ctypes.windll.crypt32
-
-    # Abrir la memoria del PFX como store temporal
-    mem_store = crypt32.PFXImportCertStore(
-        ctypes.byref(blob),
-        ctypes.c_wchar_p(cert_pass),
-        CRYPT_EXPORTABLE | PKCS12_INCLUDE_EXTENDED_PROPERTIES,
+    ps_cmd = (
+        f'$pwd = ConvertTo-SecureString -String "{cert_pass}" -Force -AsPlainText; '
+        f'$cert = Import-PfxCertificate -FilePath "{cert_path}" '
+        f'-CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd; '
+        f'$cert.GetNameInfo(0, $false)'
     )
-    if not mem_store:
-        raise RuntimeError("No se pudo leer el archivo .p12. Verifica la ruta y contraseña.")
-
-    # Obtener el primer certificado del store temporal para leer su nombre
-    cert_ctx = crypt32.CertEnumCertificatesInStore(mem_store, None)
-    nombre = ""
-    if cert_ctx:
-        buf_name = ctypes.create_unicode_buffer(256)
-        crypt32.CertGetNameStringW(cert_ctx, 4, 0, None, buf_name, 256)  # 4 = CERT_NAME_SIMPLE_DISPLAY_TYPE
-        nombre = buf_name.value
-
-    crypt32.CertCloseStore(mem_store, 0)
-
-    # Abrir el almacén personal de Windows (MY) y verificar si ya está instalado
-    CERT_STORE_PROV_SYSTEM = 10
-    CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000
-    my_store = crypt32.CertOpenStore(
-        CERT_STORE_PROV_SYSTEM, 0, None,
-        CERT_SYSTEM_STORE_CURRENT_USER, ctypes.c_wchar_p("MY")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        capture_output=True, text=True
     )
-
-    # Reinstalar siempre para asegurar que está actualizado
-    buf2 = (ctypes.c_byte * len(p12_data))(*p12_data)
-    blob2 = CRYPT_DATA_BLOB(len(p12_data), buf2)
-    result = crypt32.PFXImportCertStore(
-        ctypes.byref(blob2),
-        ctypes.c_wchar_p(cert_pass),
-        CRYPT_EXPORTABLE | PKCS12_INCLUDE_EXTENDED_PROPERTIES,
-    )
-    if result:
-        crypt32.CertCloseStore(result, 0)
+    nombre = result.stdout.strip()
+    if result.returncode == 0 and nombre:
         print(f"Certificado '{nombre}' instalado/verificado en almacén de Windows.")
     else:
-        print("Advertencia: no se pudo instalar el certificado automáticamente.")
-
-    if my_store:
-        crypt32.CertCloseStore(my_store, 0)
-
+        print(f"Advertencia al instalar certificado: {result.stderr.strip()}")
+        nombre = ""
     return nombre
 
 
