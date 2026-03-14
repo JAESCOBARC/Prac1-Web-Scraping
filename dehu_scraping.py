@@ -137,11 +137,23 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
 
         try:
             # ---- Abrir DEHú y pulsar botón de acceso ----
-            page.goto("https://dehu.redsara.es", wait_until="networkidle")
-            page.evaluate("() => document.querySelector('dnt-button.access-btn').click()")
+            page.goto("https://dehu.redsara.es", wait_until="domcontentloaded")
+            # Esperar a que el web component cargue su shadow DOM antes de clicar
+            page.wait_for_selector("dnt-button.access-btn", timeout=15000)
+            page.evaluate(
+                "() => {"
+                "  const btn = document.querySelector('dnt-button.access-btn');"
+                "  const inner = btn.shadowRoot ? btn.shadowRoot.querySelector('button') : btn;"
+                "  inner.click();"
+                "}"
+            )
             page.wait_for_load_state("networkidle")
 
             # ---- Seleccionar certificado digital ----
+            page.wait_for_selector(
+                "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button",
+                timeout=15000,
+            )
             page.click(
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
