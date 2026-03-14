@@ -32,9 +32,9 @@ from playwright.sync_api import sync_playwright
 #       exportar el certificado a un archivo .pfx primero.
 # ---------------------------------------------------------------------------
 EXCEL_PATH = r"C:\Users\Usuario\OneDrive\PROYECTOS DIGITALES\TRABAJOS PERSONALIZADOS\GESTION.ES\AUTOMATIZACIONES SELENIUM\ACCESO_DEHU_ULTIMO.xlsm"
-CERT_PATH  = r"C:\ruta\al\certificado.pfx"  # .pfx o .p12
-CERT_PASS  = "contraseña_certificado"
-NIF        = "60560345B"
+CERT_PATH  = r"C:\Users\Usuario\OneDrive\CERTIFICADOS DIGITALES\Y8189986E_CALVACHE_ACEVEDO_JHON_FREDY_matiaskalvache_OK.p12"  # .pfx o .p12
+CERT_PASS  = "matiaskalvache"
+NIF        = "Y8189986E"
 
 # ---------------------------------------------------------------------------
 # UTILIDADES
