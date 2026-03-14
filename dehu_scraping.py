@@ -133,7 +133,18 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
         # headless=False obligatorio: el diálogo de certificado es una ventana
         # nativa de Windows que solo aparece con navegador visible.
         browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
+        # El certificado se aplica a todos los dominios del flujo de autenticación.
+        # La DEHú redirige a servicios externos (redsara, clave, @firma) que son
+        # los que realmente solicitan el certificado en el handshake TLS.
+        cert_entry = {"pfxPath": CERT_PATH, "passphrase": CERT_PASS}
+        context = browser.new_context(
+            client_certificates=[
+                {**cert_entry, "origin": "https://dehu.redsara.es"},
+                {**cert_entry, "origin": "https://autentica.redsara.es"},
+                {**cert_entry, "origin": "https://clave.gob.es"},
+                {**cert_entry, "origin": "https://afirma.redsara.es"},
+            ]
+        )
         page = context.new_page()
 
         try:
@@ -154,6 +165,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
                 "}"
             )
             page.wait_for_load_state("networkidle")
+            print(f"[DEBUG] URL tras botón acceso: {page.url}")
 
             # ---- Seleccionar certificado digital ----
             page.wait_for_selector(
@@ -163,6 +175,7 @@ def consulta(nif: str = NIF, conteo: int = 1, hoja2_fila: int = 2) -> str:
             page.click(
                 "xpath=//*[@id='ID_main']/div[2]/div/div/div/article[2]/div[4]/button/span[1]"
             )
+            print(f"[DEBUG] URL tras clic certificado: {page.url}")
             # ---- Manejar diálogo de certificado de Windows con pywinauto ----
             # Esperar a que aparezca la ventana nativa del selector de certificado
             dialogo = None
